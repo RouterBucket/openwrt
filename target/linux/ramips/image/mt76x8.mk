@@ -784,6 +784,22 @@ define Device/tplink_tl-wr841n-v13
 endef
 TARGET_DEVICES += tplink_tl-wr841n-v13
 
+define Device/tplink_tl-wr841hp-v5
+  $(Device/tplink-v2)
+  IMAGE_SIZE := 16064k
+  DEVICE_MODEL := TL-WR841HP
+  DEVICE_VARIANT := v5
+  TPLINK_FLASHLAYOUT := 16Mmtk
+  TPLINK_HWID := 0x08410013
+  TPLINK_HWREV := 0x268
+  TPLINK_HWREVADD := 0x5
+  IMAGES := sysupgrade.bin tftp-recovery.bin
+  IMAGE/tftp-recovery.bin := pad-extra 128k | $$(IMAGE/factory.bin)
+  DEVICE_PACKAGES := USB-EHCI kmod-usb2 kmod-usb-ohci kmod-usb-ledtrig-usbport
+  SUPPORTED_DEVICES += tl-wr841hp-v5
+endef
+TARGET_DEVICES += tplink_tl-wr841hp-v5
+
 define Device/tplink_tl-wr841n-v14
   $(Device/tplink-v2)
   IMAGE_SIZE := 3968k
