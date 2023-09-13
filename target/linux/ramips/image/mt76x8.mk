@@ -795,7 +795,8 @@ define Device/tplink_tl-wr841hp-v5
   TPLINK_HWREVADD := 0x5
   IMAGES := sysupgrade.bin tftp-recovery.bin
   IMAGE/tftp-recovery.bin := pad-extra 128k | $$(IMAGE/factory.bin)
-  DEVICE_PACKAGES := kmod-usb2 kmod-usb-ehci kmod-usb-ohci kmod-usb-ledtrig-usbport
+  DEVICE_PACKAGES := kmod-usb2 kmod-usb-ehci kmod-usb-ohci kmod-usb-ledtrig-usbport \
+         kmod-usb-storage kmod-fs-ext4 block-mount
   SUPPORTED_DEVICES += tl-wr841hp-v5
 endef
 TARGET_DEVICES += tplink_tl-wr841hp-v5
