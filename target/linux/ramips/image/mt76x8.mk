@@ -790,8 +790,7 @@ define Device/tplink_tl-wr841hp-v5
   DEVICE_MODEL := TL-WR841HP
   DEVICE_VARIANT := v5
   TPLINK_FLASHLAYOUT := 16Mmtk
-  TPLINK_HWID := 0x08410013
-  TPLINK_HWREV := 0x268
+  TPLINK_HWID := 0x08411005
   TPLINK_HWREVADD := 0x5
   IMAGES := sysupgrade.bin tftp-recovery.bin
   IMAGE/tftp-recovery.bin := pad-extra 128k | $$(IMAGE/factory.bin)
