@@ -33,37 +33,39 @@
 		compatible = "gpio-leds";
 
 		led_power: power {
-			label = "green:power";
+			label = "white:power";
 			gpios = <&gpio 36 GPIO_ACTIVE_LOW>;
 		};
 
 		wps {
-			label = "green:wps";
+			label = "white:wps";
 			gpios = <&gpio 46 GPIO_ACTIVE_LOW>;
 		};
 
-		lan1 {
-			label = "green:lan1";
+		lan {
+			label = "white:lan";
 			gpios = <&gpio 42 GPIO_ACTIVE_LOW>;
 		};
 
-		lan2 {
-			label = "green:lan2";
+		rpt {
+			label = "white:re";
 			gpios = <&gpio 41 GPIO_ACTIVE_LOW>;
 		};
 
-		lan3 {
-			label = "green:lan3";
-			gpios = <&gpio 40 GPIO_ACTIVE_LOW>;
-		};
+                /*
+		*lan3 {
+		*	label = "white:lan3";
+		*	gpios = <&gpio 40 GPIO_ACTIVE_LOW>;
+		*};
+                *
+		*lan4 {
+		*	label = "white:lan4";
+		*	gpios = <&gpio 39 GPIO_ACTIVE_LOW>;
+		*};
+                */
 
-		lan4 {
-			label = "green:lan4";
-			gpios = <&gpio 39 GPIO_ACTIVE_LOW>;
-		};
-
-		wan_green {
-			label = "green:wan";
+		wan {
+			label = "blue:wan";
 			gpios = <&gpio 43 GPIO_ACTIVE_LOW>;
 		};
 
@@ -73,7 +75,7 @@
 		};
 
 		wlan {
-			label = "green:wlan";
+			label = "white:wifi";
 			gpios = <&gpio 44 GPIO_ACTIVE_LOW>;
 		};
 	};
