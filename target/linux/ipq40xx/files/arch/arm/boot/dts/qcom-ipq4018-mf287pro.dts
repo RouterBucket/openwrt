@@ -3,22 +3,11 @@
 // Copyright (c) 2022, Giammarco Marzano <stich86@gmail.com>.
 // Copyright (c) 2023, Andreas Böhler <dev@aboehler.at>
 
-#include "qcom-ipq4018-mf287.dtsi"
+#include "qcom-ipq4018-mf287_common.dtsi"
 
 / {
 	model = "ZTE MF287Pro";
 	compatible = "zte,mf287pro";
-
-	gpio_export {
-		compatible = "gpio-export";
-		#size-cells = <0>;
-
-		modem {
-			gpio-export,name = "modem-reset";
-			gpio-export,output = <0>;
-			gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
-		};
-	};
 
 	regulator-usb-vbus {
 		compatible = "regulator-fixed";
@@ -29,6 +18,10 @@
 		regulator-boot-on;
 		gpio = <&tlmm 25 GPIO_ACTIVE_LOW>;
 	};
+};
+
+&gpio_modem_reset {
+	gpios = <&tlmm 8 GPIO_ACTIVE_HIGH>;
 };
 
 &key_reset {
@@ -140,16 +133,19 @@
 				label = "ART";
 				reg = <0xa0000 0x80000>;
 				read-only;
-				compatible = "nvmem-cells";
-				#address-cells = <1>;
-				#size-cells = <1>;
 
-				precal_art_1000: precal@1000 {
-					reg = <0x1000 0x2f20>;
-				};
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
 
-				precal_art_5000: precal@5000 {
-					reg = <0x5000 0x2f20>;
+					precal_art_1000: precal@1000 {
+						reg = <0x1000 0x2f20>;
+					};
+
+					precal_art_5000: precal@5000 {
+						reg = <0x5000 0x2f20>;
+					};
 				};
 			};
 
@@ -157,12 +153,17 @@
 				label = "mac";
 				reg = <0x120000 0x80000>;
 				read-only;
-				compatible = "nvmem-cells";
-				#address-cells = <1>;
-				#size-cells = <1>;
 
-				macaddr_mac_0: macaddr@0 {
-					reg = <0x0 0x6>;
+				nvmem-layout {
+					compatible = "fixed-layout";
+					#address-cells = <1>;
+					#size-cells = <1>;
+
+					macaddr_mac_0: macaddr@0 {
+						compatible = "mac-base";
+						reg = <0x0 0x6>;
+						#nvmem-cell-cells = <1>;
+					};
 				};
 			};
 
@@ -262,4 +263,14 @@
 			output-high;
 		};
 	};
+};
+
+/* The MF287Plus and MF287Pro share the same board data file */
+&wifi0 {
+	qcom,ath10k-calibration-variant = "zte,mf287plus";
+};
+
+/* The MF287Plus and MF287Pro share the same board data file */
+&wifi1{
+	qcom,ath10k-calibration-variant = "zte,mf287plus";
 };

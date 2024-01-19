@@ -111,6 +111,94 @@ uc_hostapd_remove_iface(uc_vm_t *vm, size_t nargs)
 	return NULL;
 }
 
+static struct hostapd_vlan *
+bss_conf_find_vlan(struct hostapd_bss_config *bss, int id)
+{
+	struct hostapd_vlan *vlan;
+
+	for (vlan = bss->vlan; vlan; vlan = vlan->next)
+		if (vlan->vlan_id == id)
+			return vlan;
+
+	return NULL;
+}
+
+static int
+bss_conf_rename_vlan(struct hostapd_data *hapd, struct hostapd_vlan *vlan,
+		     const char *ifname)
+{
+	if (!strcmp(ifname, vlan->ifname))
+		return 0;
+
+	hostapd_drv_if_rename(hapd, WPA_IF_AP_VLAN, vlan->ifname, ifname);
+	os_strlcpy(vlan->ifname, ifname, sizeof(vlan->ifname));
+
+	return 0;
+}
+
+static int
+bss_reload_vlans(struct hostapd_data *hapd, struct hostapd_bss_config *bss)
+{
+	struct hostapd_bss_config *old_bss = hapd->conf;
+	struct hostapd_vlan *vlan, *vlan_new, *wildcard;
+	char ifname[IFNAMSIZ + 1], vlan_ifname[IFNAMSIZ + 1], *pos;
+	int ret;
+
+	vlan = bss_conf_find_vlan(old_bss, VLAN_ID_WILDCARD);
+	wildcard = bss_conf_find_vlan(bss, VLAN_ID_WILDCARD);
+	if (!!vlan != !!wildcard)
+		return -1;
+
+	if (vlan && wildcard && strcmp(vlan->ifname, wildcard->ifname) != 0)
+		strcpy(vlan->ifname, wildcard->ifname);
+	else
+		wildcard = NULL;
+
+	for (vlan = bss->vlan; vlan; vlan = vlan->next) {
+		if (vlan->vlan_id == VLAN_ID_WILDCARD ||
+		    vlan->dynamic_vlan > 0)
+			continue;
+
+		if (!bss_conf_find_vlan(old_bss, vlan->vlan_id))
+			return -1;
+	}
+
+	for (vlan = old_bss->vlan; vlan; vlan = vlan->next) {
+		if (vlan->vlan_id == VLAN_ID_WILDCARD)
+			continue;
+
+		if (vlan->dynamic_vlan == 0) {
+			vlan_new = bss_conf_find_vlan(bss, vlan->vlan_id);
+			if (!vlan_new)
+				return -1;
+
+			if (bss_conf_rename_vlan(hapd, vlan, vlan_new->ifname))
+				return -1;
+
+			continue;
+		}
+
+		if (!wildcard)
+			continue;
+
+		os_strlcpy(ifname, wildcard->ifname, sizeof(ifname));
+		pos = os_strchr(ifname, '#');
+		if (!pos)
+			return -1;
+
+		*pos++ = '\0';
+		ret = os_snprintf(vlan_ifname, sizeof(vlan_ifname), "%s%d%s",
+				  ifname, vlan->vlan_id, pos);
+	        if (os_snprintf_error(sizeof(vlan_ifname), ret))
+			return -1;
+
+		if (bss_conf_rename_vlan(hapd, vlan, vlan_ifname))
+			return -1;
+	}
+
+	return 0;
+}
+
 static uc_value_t *
 uc_hostapd_bss_set_config(uc_vm_t *vm, size_t nargs)
 {
@@ -150,6 +238,7 @@ uc_hostapd_bss_set_config(uc_vm_t *vm, size_t nargs)
 	} while (0)
 
 		swap_field(ssid.wpa_psk_file);
+		ret = bss_reload_vlans(hapd, bss);
 		goto done;
 	}
 
@@ -376,14 +465,10 @@ uc_hostapd_bss_ctrl(uc_vm_t *vm, size_t nargs)
 	return ucv_string_new_length(reply, reply_len);
 }
 
-static uc_value_t *
-uc_hostapd_iface_stop(uc_vm_t *vm, size_t nargs)
+static void
+uc_hostapd_disable_iface(struct hostapd_iface *iface)
 {
-	struct hostapd_iface *iface = uc_fn_thisval("hostapd.iface");
-	int i;
-
 	switch (iface->state) {
-	case HAPD_IFACE_ENABLED:
 	case HAPD_IFACE_DISABLED:
 		break;
 #ifdef CONFIG_ACS
@@ -396,9 +481,19 @@ uc_hostapd_iface_stop(uc_vm_t *vm, size_t nargs)
 		hostapd_disable_iface(iface);
 		break;
 	}
+}
+
+static uc_value_t *
+uc_hostapd_iface_stop(uc_vm_t *vm, size_t nargs)
+{
+	struct hostapd_iface *iface = uc_fn_thisval("hostapd.iface");
+	int i;
+
+	if (!iface)
+		return NULL;
 
 	if (iface->state != HAPD_IFACE_ENABLED)
-		hostapd_disable_iface(iface);
+		uc_hostapd_disable_iface(iface);
 
 	for (i = 0; i < iface->num_bss; i++) {
 		struct hostapd_data *hapd = iface->bss[i];
@@ -469,8 +564,6 @@ uc_hostapd_iface_start(uc_vm_t *vm, size_t nargs)
 
 out:
 	switch (iface->state) {
-	case HAPD_IFACE_DISABLED:
-		break;
 	case HAPD_IFACE_ENABLED:
 		if (!hostapd_is_dfs_required(iface) ||
 			hostapd_is_dfs_chan_available(iface))
@@ -478,7 +571,7 @@ out:
 		wpa_printf(MSG_INFO, "DFS CAC required on new channel, restart interface");
 		/* fallthrough */
 	default:
-		hostapd_disable_iface(iface);
+		uc_hostapd_disable_iface(iface);
 		break;
 	}
 
@@ -618,6 +711,7 @@ int hostapd_ucode_init(struct hapd_interfaces *ifaces)
 		{ "freq_info", uc_wpa_freq_info },
 		{ "add_iface", uc_hostapd_add_iface },
 		{ "remove_iface", uc_hostapd_remove_iface },
+		{ "udebug_set", uc_wpa_udebug_set },
 	};
 	static const uc_function_list_t bss_fns[] = {
 		{ "ctrl", uc_hostapd_bss_ctrl },

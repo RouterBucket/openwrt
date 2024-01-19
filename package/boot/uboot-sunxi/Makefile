@@ -15,6 +15,8 @@ PKG_HASH:=e31cac91545ff41b71cec5d8c22afd695645cd6e2a442ccdacacd60534069341
 
 PKG_MAINTAINER:=Zoltan HERPAI <wigyori@uid0.hu>
 
+UBOOT_USE_INTREE_DTC:=1
+
 include $(INCLUDE_DIR)/u-boot.mk
 include $(INCLUDE_DIR)/package.mk
 
@@ -328,6 +330,15 @@ define U-Boot/orangepi_pc2
   ATF:=a64
 endef
 
+define U-Boot/orangepi_zero2
+  BUILD_SUBTARGET:=cortexa53
+  NAME:=Xunlong Orange Pi Zero2
+  BUILD_DEVICES:=xunlong_orangepi-zero2
+  DEPENDS:=+PACKAGE_u-boot-orangepi_zero2:trusted-firmware-a-sunxi-h616
+  UENV:=h616
+  ATF:=h616
+endef
+
 define U-Boot/Bananapi_M2_Ultra
   BUILD_SUBTARGET:=cortexa7
   NAME:=Bananapi M2 Ultra
@@ -339,6 +350,13 @@ define U-Boot/bananapi_m2_berry
   NAME:=Bananapi M2 Berry
   BUILD_DEVICES:=sinovoip_bananapi-m2-berry
 endef
+
+define U-Boot/bananapi_p2_zero
+  BUILD_SUBTARGET:=cortexa7
+  NAME:=Bananapi P2 Zero
+  BUILD_DEVICES:=sinovoip_bananapi-p2-zero
+endef
+
 
 UBOOT_TARGETS := \
 	a64-olinuxino \
@@ -352,6 +370,7 @@ UBOOT_TARGETS := \
 	bananapi_m2_plus_h3 \
 	Bananapi \
 	bananapi_m2_berry \
+	bananapi_p2_zero \
 	Bananapi_M2_Ultra \
 	Bananapro \
 	Cubieboard \
@@ -382,6 +401,7 @@ UBOOT_TARGETS := \
 	orangepi_plus \
 	orangepi_2 \
 	orangepi_pc2 \
+	orangepi_zero2 \
 	pangolin \
 	pine64_plus \
 	Sinovoip_BPI_M3 \

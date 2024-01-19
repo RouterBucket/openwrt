@@ -2,9 +2,10 @@ let libubus = require("ubus");
 import { open, readfile } from "fs";
 import { wdev_create, wdev_remove, is_equal, vlist_new, phy_is_fullmac, phy_open } from "common";
 
-let ubus = libubus.connect();
+let ubus = libubus.connect(null, 60);
 
 hostapd.data.config = {};
+hostapd.data.pending_config = {};
 
 hostapd.data.file_fields = {
 	vlan_file: true,
@@ -26,7 +27,6 @@ function iface_remove(cfg)
 	if (!cfg || !cfg.bss || !cfg.bss[0] || !cfg.bss[0].ifname)
 		return;
 
-	hostapd.remove_iface(cfg.bss[0].ifname);
 	for (let bss in cfg.bss)
 		wdev_remove(bss.ifname);
 }
@@ -95,14 +95,14 @@ function iface_add(phy, config, phy_status)
 	let config_inline = iface_gen_config(phy, config, !!phy_status);
 
 	let bss = config.bss[0];
-	let ret = hostapd.add_iface(`bss_config=${bss.ifname}:${config_inline}`);
+	let ret = hostapd.add_iface(`bss_config=${phy}:${config_inline}`);
 	if (ret < 0)
 		return false;
 
 	if (!phy_status)
 		return true;
 
-	let iface = hostapd.interfaces[bss.ifname];
+	let iface = hostapd.interfaces[phy];
 	if (!iface)
 		return false;
 
@@ -123,10 +123,121 @@ function iface_config_macaddr_list(config)
 	return macaddr_list;
 }
 
-function iface_restart(phydev, config, old_config)
+function iface_update_supplicant_macaddr(phy, config)
+{
+	let macaddr_list = [];
+	for (let i = 0; i < length(config.bss); i++)
+		push(macaddr_list, config.bss[i].bssid);
+	ubus.defer("wpa_supplicant", "phy_set_macaddr_list", { phy: phy, macaddr: macaddr_list });
+}
+
+function __iface_pending_next(pending, state, ret, data)
+{
+	let config = pending.config;
+	let phydev = pending.phydev;
+	let phy = pending.phy;
+	let bss = config.bss[0];
+
+	if (pending.defer)
+		pending.defer.abort();
+	delete pending.defer;
+	switch (state) {
+	case "init":
+		let macaddr_list = [];
+		for (let i = 0; i < length(config.bss); i++)
+			push(macaddr_list, config.bss[i].bssid);
+		pending.call("wpa_supplicant", "phy_set_macaddr_list", { phy: phy, macaddr: macaddr_list });
+		return "create_bss";
+	case "create_bss":
+		let err = wdev_create(phy, bss.ifname, { mode: "ap" });
+		if (err) {
+			hostapd.printf(`Failed to create ${bss.ifname} on phy ${phy}: ${err}`);
+			return null;
+		}
+
+		pending.call("wpa_supplicant", "phy_status", { phy: phy });
+		return "check_phy";
+	case "check_phy":
+		let phy_status = data;
+		if (phy_status && phy_status.state == "COMPLETED") {
+			if (iface_add(phy, config, phy_status))
+				return "done";
+
+			hostapd.printf(`Failed to bring up phy ${phy} ifname=${bss.ifname} with supplicant provided frequency`);
+		}
+		pending.call("wpa_supplicant", "phy_set_state", { phy: phy, stop: true });
+		return "wpas_stopped";
+	case "wpas_stopped":
+		if (!iface_add(phy, config))
+			hostapd.printf(`hostapd.add_iface failed for phy ${phy} ifname=${bss.ifname}`);
+		pending.call("wpa_supplicant", "phy_set_state", { phy: phy, stop: false });
+		return null;
+	case "done":
+	default:
+		delete hostapd.data.pending_config[phy];
+		break;
+	}
+}
+
+function iface_pending_next(ret, data)
+{
+	let pending = true;
+	let cfg = this;
+
+	while (pending) {
+		this.next_state = __iface_pending_next(cfg, this.next_state, ret, data);
+		if (!this.next_state) {
+			__iface_pending_next(cfg, "done");
+			return;
+		}
+		pending = !this.defer;
+	}
+}
+
+function iface_pending_abort()
+{
+	this.next_state = "done";
+	this.next();
+}
+
+function iface_pending_ubus_call(obj, method, arg)
+{
+	let ubus = hostapd.data.ubus;
+	let pending = this;
+	this.defer = ubus.defer(obj, method, arg, (ret, data) => { delete pending.defer; pending.next(ret, data) });
+}
+
+const iface_pending_proto = {
+	next: iface_pending_next,
+	call: iface_pending_ubus_call,
+	abort: iface_pending_abort,
+};
+
+function iface_pending_init(phydev, config)
 {
 	let phy = phydev.name;
 
+	let pending = proto({
+		next_state: "init",
+		phydev: phydev,
+		phy: phy,
+		config: config,
+		next: iface_pending_next,
+	}, iface_pending_proto);
+
+	hostapd.data.pending_config[phy] = pending;
+	pending.next();
+}
+
+function iface_restart(phydev, config, old_config)
+{
+	let phy = phydev.name;
+	let pending = hostapd.data.pending_config[phy];
+
+	if (pending)
+		pending.abort();
+
+	hostapd.remove_iface(phy);
 	iface_remove(old_config);
 	iface_remove(config);
 
@@ -142,24 +253,7 @@ function iface_restart(phydev, config, old_config)
 			bss.bssid = phydev.macaddr_next();
 	}
 
-	let bss = config.bss[0];
-	let err = wdev_create(phy, bss.ifname, { mode: "ap" });
-	if (err)
-		hostapd.printf(`Failed to create ${bss.ifname} on phy ${phy}: ${err}`);
-
-	let ubus = hostapd.data.ubus;
-	let phy_status = ubus.call("wpa_supplicant", "phy_status", { phy: phy });
-	if (phy_status && phy_status.state == "COMPLETED") {
-		if (iface_add(phy, config, phy_status))
-			return;
-
-		hostapd.printf(`Failed to bring up phy ${phy} ifname=${bss.ifname} with supplicant provided frequency`);
-	}
-
-	ubus.call("wpa_supplicant", "phy_set_state", { phy: phy, stop: true });
-	if (!iface_add(phy, config))
-		hostapd.printf(`hostapd.add_iface failed for phy ${phy} ifname=${bss.ifname}`);
-	ubus.call("wpa_supplicant", "phy_set_state", { phy: phy, stop: false });
+	iface_pending_init(phydev, config);
 }
 
 function array_to_obj(arr, key, start)
@@ -215,6 +309,7 @@ function bss_remove_file_fields(config)
 	for (let key in config.hash)
 		new_cfg.hash[key] = config.hash[key];
 	delete new_cfg.hash.wpa_psk_file;
+	delete new_cfg.hash.vlan_file;
 
 	return new_cfg;
 }
@@ -263,11 +358,14 @@ function iface_reload_config(phydev, config, old_config)
 	if (is_equal(old_config.bss, config.bss))
 		return true;
 
+	if (hostapd.data.pending_config[phy])
+		return false;
+
 	if (!old_config.bss || !old_config.bss[0])
 		return false;
 
+	let iface = hostapd.interfaces[phy];
 	let iface_name = old_config.bss[0].ifname;
-	let iface = hostapd.interfaces[iface_name];
 	if (!iface) {
 		hostapd.printf(`Could not find previous interface ${iface_name}`);
 		return false;
@@ -475,11 +573,12 @@ function iface_reload_config(phydev, config, old_config)
 		             bss_remove_file_fields(bss_list_cfg[i]))) {
 			hostapd.printf(`Update config data files for bss ${ifname}`);
 			if (bss.set_config(config_inline, i, true) < 0) {
-				hostapd.printf(`Failed to update config data files for bss ${ifname}`);
+				hostapd.printf(`Could not update config data files for bss ${ifname}`);
 				return false;
+			} else {
+				bss.ctrl("RELOAD_WPA_PSK");
+				continue;
 			}
-			bss.ctrl("RELOAD_WPA_PSK");
-			continue;
 		}
 
 		bss_reload_psk(bss, config.bss[i], bss_list_cfg[i]);
@@ -487,8 +586,6 @@ function iface_reload_config(phydev, config, old_config)
 			continue;
 
 		hostapd.printf(`Reload config for bss '${config.bss[0].ifname}' on phy '${phy}'`);
-		hostapd.printf(`old: ${bss_remove_file_fields(bss_list_cfg[i])}`);
-		hostapd.printf(`new: ${bss_remove_file_fields(config.bss[i])}`);
 		if (bss.set_config(config_inline, i) < 0) {
 			hostapd.printf(`Failed to set config for bss ${ifname}`);
 			return false;
@@ -498,22 +595,16 @@ function iface_reload_config(phydev, config, old_config)
 	return true;
 }
 
-function iface_update_supplicant_macaddr(phy, config)
-{
-	let macaddr_list = [];
-	for (let i = 0; i < length(config.bss); i++)
-		push(macaddr_list, config.bss[i].bssid);
-	ubus.call("wpa_supplicant", "phy_set_macaddr_list", { phy: phy, macaddr: macaddr_list });
-}
-
 function iface_set_config(phy, config)
 {
 	let old_config = hostapd.data.config[phy];
 
 	hostapd.data.config[phy] = config;
 
-	if (!config)
+	if (!config) {
+		hostapd.remove_iface(phy);
 		return iface_remove(old_config);
+	}
 
 	let phydev = phy_open(phy);
 	if (!phydev) {
@@ -534,7 +625,6 @@ function iface_set_config(phy, config)
 
 	hostapd.printf(`Restart interface for phy ${phy}`);
 	let ret = iface_restart(phydev, config, old_config);
-	iface_update_supplicant_macaddr(phy, config);
 
 	return ret;
 }
@@ -568,7 +658,7 @@ function iface_load_config(filename)
 
 	let bss;
 	let line;
-	while ((line = trim(f.read("line"))) != null) {
+	while ((line = rtrim(f.read("line"), "\n")) != null) {
 		let val = split(line, "=", 2);
 		if (!val[0])
 			continue;
@@ -590,7 +680,7 @@ function iface_load_config(filename)
 		push(config.radio.data, line);
 	}
 
-	while ((line = trim(f.read("line"))) != null) {
+	while ((line = rtrim(f.read("line"), "\n")) != null) {
 		if (line == "#default_macaddr")
 			bss.default_macaddr = true;
 
@@ -667,7 +757,7 @@ let main_obj = {
 			if (!config || !config.bss || !config.bss[0] || !config.bss[0].ifname)
 				return 0;
 
-			let iface = hostapd.interfaces[config.bss[0].ifname];
+			let iface = hostapd.interfaces[phy];
 			if (!iface)
 				return 0;
 
@@ -781,6 +871,7 @@ let main_obj = {
 
 hostapd.data.ubus = ubus;
 hostapd.data.obj = ubus.publish("hostapd", main_obj);
+hostapd.udebug_set("hostapd", hostapd.data.ubus);
 
 function bss_event(type, name, data) {
 	let ubus = hostapd.data.ubus;
@@ -795,6 +886,7 @@ return {
 	shutdown: function() {
 		for (let phy in hostapd.data.config)
 			iface_set_config(phy, null);
+		hostapd.udebug_set(null);
 		hostapd.ubus.disconnect();
 	},
 	bss_add: function(name, obj) {
